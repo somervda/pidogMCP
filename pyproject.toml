@@ -1,9 +1,10 @@
 [project]
 name = "pidogmcp"
 version = "0.1.0"
-description = "Add your description here"
+description = "MCP server wrapping the Sunfounder PiDog robot API"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "mcp[cli]>=1.26.0",
+    "pidog>=1.0.0",
 ]
