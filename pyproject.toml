@@ -8,3 +8,8 @@ dependencies = [
     "mcp[cli]>=1.26.0",
     "pidog>=1.0.0",
 ]
+[project.scripts]
+pidogmcp = "pidogmcp.server:main"
+
+[tool.mcp]
+server = "pidogmcp.server"
