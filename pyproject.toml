@@ -1,15 +1,30 @@
 [project]
 name = "pidogmcp"
 version = "0.1.0"
-description = "MCP server wrapping the Sunfounder PiDog robot API"
+description = "FastMCP server wrapping the Sunfounder PiDog robot API"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "mcp[cli]>=1.26.0",
+    "uvicorn>=0.27.0",
     "pidog>=1.0.0",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21.0",
+]
+
 [project.scripts]
 pidogmcp = "pidogmcp.server:main"
 
 [tool.mcp]
 server = "pidogmcp.server"
+
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["pidogmcp"]
