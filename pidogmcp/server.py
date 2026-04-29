@@ -1,530 +1,771 @@
 #!/usr/bin/env python3
 """
-FastMCP server that wraps the Sunfounder PiDog robot API.
-
-Provides MCP tools for controlling a PiDog robot over HTTP,
-including actions, movement, sensory reading, and audio playback.
+FastMCP server that wraps the pidog robot API.
+Provides remote access to pidog functionality via MCP tools and resources.
 """
 
-from __future__ import annotations
-
 import os
-from contextlib import asynccontextmanager
-from typing import Optional
+import sys
+import asyncio
+from typing import Any, Optional
+from enum import Enum
 
 from mcp.server.fastmcp import FastMCP
 
-# ---------------------------------------------------------------------------
-# Valid action names for the do_action tool (from pidog's ActionDict)
-# ---------------------------------------------------------------------------
-VALID_ACTIONS: list[str] = [
-    # Legs
-    "stand",
-    "sit",
-    "lie",
-    "lie_with_hands_out",
-    "forward",
-    "api_backward",
-    "turn_left",
-    "turn_right",
-    "trot",
-    "stretch",
-    "push_up",
-    "doze_off",
-    "half_sit",
-    # Head
-    "nod_lethargy",
-    "shake_head",
-    "tilting_head_left",
-    "tilting_head_right",
-    "tilting_head",
-    "head_bark",
-    "head_up_down",
-    # Tail
-    "wag_tail",
-]
+# Try to import pidog, fall back to mock mode if not available
+try:
+    from pidog import Pidog
+    PIDOG_AVAILABLE = True
+except ImportError:
+    PIDOG_AVAILABLE = False
+    print("Warning: pidog module not available. Running in mock mode.", file=sys.stderr)
 
-# ---------------------------------------------------------------------------
-# Lazy singleton for the Pidog instance
-# ---------------------------------------------------------------------------
-_pidog_instance = None
-_pidog_initialized = False
+# Configuration
+MCP_HOST = os.getenv("PIDOG_MCP_HOST", "127.0.0.1")
+MCP_PORT = int(os.getenv("PIDOG_MCP_PORT", "8080"))
+
+# Global pidog instance
+pidog_instance: Optional[Any] = None
 
 
-def get_pidog() -> "Pidog":  # noqa: F821
-    """Return (and lazily create) the shared Pidog hardware instance."""
-    global _pidog_instance, _pidog_initialized
-    if not _pidog_initialized:
+def get_pidog() -> Optional[Any]:
+    """Get or create the global pidog instance."""
+    global pidog_instance
+    if pidog_instance is None and PIDOG_AVAILABLE:
         try:
-            from pidog import Pidog
-        except ImportError as exc:
-            raise RuntimeError(
-                "The 'pidog' package is not installed. "
-                "Install it with: pip install pidog"
-            ) from exc
-        _pidog_instance = Pidog()
-        _pidog_initialized = True
-    return _pidog_instance
+            pidog_instance = Pidog()
+        except Exception as e:
+            print(f"Error initializing Pidog: {e}", file=sys.stderr)
+            return None
+    return pidog_instance
 
 
-# --------------------------------------------------------------------------
-# Lifespan: clean up hardware on shutdown
-# -----------------------------------------------------------------------------
-
-@asynccontextmanager
-async def server_lifespan(mcp: FastMCP):
-    """Manage Pidog hardware lifecycle."""
-    yield
-    # Shutdown: stop all threads and return to initial position
-    global _pidog_initialized
-    if _pidog_initialized and _pidog_instance is not None:
+def cleanup_pidog():
+    """Clean up the pidog instance."""
+    global pidog_instance
+    if pidog_instance is not None:
         try:
-            _pidog_instance.close()
-        except Exception:
-            pass
-        _pidog_initialized = False
+            pidog_instance.close()
+        except Exception as e:
+            print(f"Error closing Pidog: {e}", file=sys.stderr)
+        pidog_instance = None
 
 
-# ---------------------------------------------------------------------------
-# Create the FastMCP server
-# ---------------------------------------------------------------------------
-mcp = FastMCP(
-    "pidog-robot",
-    instructions="Control a Sunfounder PiDog robot. Call tools to execute actions, move body parts, read sensors, and play sounds.",
-    lifespan=server_lifespan,
-)
+# Create FastMCP server
+server = FastMCP("Pidog MCP Server")
 
 
-# ----------------------------------------------------------------------------
-# Tools
-# ---------------------------------------------------------------------------
-
-@mcp.tool()
+@server.tool()
 def do_action(
     action_name: str,
     step_count: int = 1,
     speed: int = 50,
-    pitch_comp: float = 0.0,
-) -> str:
-    """Execute a predefined robot action by name.
-
+    pitch_comp: int = 0,
+) -> dict:
+    """
+    Execute a predefined action on the Pidog robot.
+    
     Valid action names:
-      Legs: stand, sit, lie, lie_with_hands_out, forward, backward,
-            turn_left, turn_right, trot, stretch, push_up, doze_off, half_sit
-      Head: nod_lethargy, shake_head, tilting_head_left, tilting_head_right,
-            tilting_head, head_bark, head_up_down
-      Tail: wag_tail
-
+    - stand: Stand upright
+    - sit: Sit down
+    - lie: Lie flat on the ground
+    - lie_with_hands_out: Lie down with front legs extended
+    - forward: Walk forward
+    - backward: Walk backward
+    - turn_left: Turn left while moving forward
+    - turn_right: Turn right while moving forward
+    - trot: Fast trotting gait
+    - stretch: Stretch the body
+    - push_up: Do push-ups
+    - doze_off: Doze off with nodding head
+    - nod_lethargy: Nod head with lethargy
+    - shake_head: Shake head left and right
+    - tilting_head_left: Tilt head to the left
+    - tilting_head_right: Tilt head to the right
+    - tilting_head: Tilt head left and right repeatedly
+    - head_bark: Raise head and bark position
+    - wag_tail: Wag tail
+    - head_up_down: Move head up and down
+    - half_sit: Half-sitting position
+    
     Args:
-        action_name: The name of the action to perform.
-        step_count: Number of times to repeat the action (default 1).
-        speed: Movement speed 0-100 (default 50).
-        pitch_comp: Pitch compensation in degrees for head actions (default 0).
-
+        action_name: Name of the action to perform
+        step_count: Number of times to repeat the action (default: 1)
+        speed: Speed of movement 0-100 (default: 50)
+        pitch_comp: Pitch compensation in degrees (default: 0)
+        
     Returns:
-        A status message confirming the action was queued.
+        Dictionary with status and result message
     """
-    if action_name not in VALID_ACTIONS:
-        return f"Error: Unknown action '{action_name}'. Valid actions: {', '.join(VALID_ACTIONS)}"
+    if not PIDOG_AVAILABLE:
+        return {
+            "status": "error",
+            "message": "Pidog module not available. Running in mock mode.",
+            "action": action_name,
+        }
+    
+    pidog = get_pidog()
+    if pidog is None:
+        return {
+            "status": "error",
+            "message": "Failed to initialize Pidog",
+            "action": action_name,
+        }
+    
     try:
-        dog = get_pidog()
-        dog.do_action(action_name, step_count=step_count, speed=speed, pitch_comp=pitch_comp)
-        return f"Action '{action_name}' queued successfully (steps={step_count}, speed={api_speed=speed})."
-    except Exception as exc:
-        return f"Error executing action '{action_name}': {exc}"
+        pidog.do_action(action_name, step_count=step_count, speed=speed, pitch_comp=pitch_comp)
+        return {
+            "status": "success",
+            "message": f"Action '{action_name}' executed successfully",
+            "action": action_name,
+            "steps": step_count,
+            "speed": speed,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error executing action: {str(e)}",
+            "action": action_name,
+        }
 
 
-@mcp.tool()
-def legs_move(
+@server.tool()
+def move_legs(
     angles: list[float],
-    immediately: bool = True,
     speed: int = 50,
-) -> str:
-    """Move the robot legs to specified angles.
-
-    Args:
-        angles: List of 8 leg servo angles in degrees. Order:
-                [LF_leg, LF_foot, RF_leg, RF_foot, LH_leg, LH_foot, RH_leg, RH_foot].
-        immediately: If True, clear existing actions before moving (default True).
-        speed: Movement speed 0-100 (default 50).
-
-    Returns:
-        A status message confirming the movement was queued.
-    """
-    if len(angles) != 8:
-        return "Error: angles must contain exactly 8 values."
-    try:
-        dog = get_pidog()
-        dog.legs_move([angles], immediately=immediately, speed=speed)
-        return f"Legs move queued (angles={angles}, speed={speed})."
-    except Exception as exc:
-        return f"Error moving legs: {exc}"
-
-
-@mcp.tool()
-def head_move(
-    yaw: float = 0.0,
-    roll: float = 0.0,
-    pitch: float = 0.0,
-    roll_comp: float = 0.0,
-    pitch_comp: float = 0.0,
     immediately: bool = True,
-    speed: int = 50,
-) -> str:
-    """Move the robot head to specified yaw/roll/pitch angles.
-
-    Args:
-        yaw: Yaw angle in degrees, range [-90, 90] (default 0).
-        roll: Roll angle in degrees, range [-70, 70] (default 0).
-        pitch: Pitch angle in degrees, range [-45, 30] (default 0).
-        roll_comp: Roll compensation offset (default 0).
-        pitch_comp: Pitch compensation offset (default 0).
-        immediately: If True, clear existing actions before moving (default True).
-        speed: Movement speed 0-100 (default 50).
-
-    Returns:
-        A status message confirming the movement was queued.
+) -> dict:
     """
+    Move the legs to specified angles.
+    
+    Args:
+        angles: List of 8 angles for the 4 legs (leg_angle, foot_angle for each)
+        speed: Speed of movement 0-100 (default: 50)
+        immediately: Stop current movement and move immediately (default: True)
+        
+    Returns:
+        Dictionary with status and result message
+    """
+    if not PIDOG_AVAILABLE:
+        return {
+            "status": "error",
+            "message": "Pidog module not available",
+        }
+    
+    pidog = get_pidog()
+    if pidog is None:
+        return {
+            "status": "error",
+            "message": "Failed to initialize Pidog",
+        }
+    
     try:
-        dog = get_pidog()
-        dog.head_move(
-            [[yaw, roll, pitch]],
-            roll_comp=roll_comp,
-            pitch_comp=api_pitch_comp=pitch_comp,
-            immediately=immediately,
-            speed=speed,
-        )
-        return f"Head move queued (yaw={yaw}, roll={roll}, pitch={pitch}, speed={speed})."
-    except Exception as exc:
-        return f"Error moving head: {exc}"
+        pidog.legs_move(angles, speed=speed, immediately=immediately)
+        return {
+            "status": "success",
+            "message": "Legs moved successfully",
+            "angles": angles,
+            "speed": speed,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error moving legs: {str(e)}",
+        }
 
 
-@mcp.tool()
-def head_move_raw(
-    angles: list[float],
+@server.tool()
+def move_head(
+    target_yrps: list[list[float]],
+    speed: int = 50,
     immediately: bool = True,
-    speed: int = 50,
-) -> str:
-    """Move the robot head using raw servo angles (bypasses RPY conversion).
-
-    Args:
-        angles: List of 3 head servo angles [yaw, roll, pitch] in degrees.
-        immediately: If True, clear existing actions before moving (default True).
-        speed: Movement speed 0-100 (default 50).
-
-    Returns:
-        A status message confirming the movement was queued.
+    roll_comp: int = 0,
+    pitch_comp: int = 0,
+) -> dict:
     """
-    if len(angles) != 3:
-        return "Error: angles must contain exactly 3 values [yaw, roll, pitch]."
+    Move the head to specified yaw, roll, pitch positions.
+    
+    Args:
+        target_yrps: List of [yaw, roll, pitch] positions (in degrees)
+        speed: Speed of movement 0-100 (default: 50)
+        immediately: Stop current movement and move immediately (default: True)
+        roll_comp: Roll compensation (default: 0)
+        pitch_comp: Pitch compensation (default: 0)
+        
+    Returns:
+        Dictionary with status and result message
+    """
+    if not PIDOG_AVAILABLE:
+        return {
+            "status": "error",
+            "message": "Pidog module not available",
+        }
+    
+    pidog = get_pidog()
+    if pidog is None:
+        return {
+            "status": "error",
+            "message": "Failed to initialize Pidog",
+        }
+    
     try:
-        dog = get_pidog()
-        dog.head_move_raw([angles], immediately=immediately, speed=speed)
-        return f"Head raw move queued (angles={angles}, speed={speed})."
-    except Exception as exc:
-        return f"Error moving head: {exc}"
+        pidog.head_move(target_yrps, speed=speed, immediately=immediately, roll_comp=roll_comp, pitch_comp=pitch_comp)
+        return {
+            "status": "success",
+            "message": "Head moved successfully",
+            "positions": target_yrps,
+            "speed": speed,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error moving head: {str(e)}",
+        }
 
 
-@mcp.tool()
-def tail_move(
-    angles: list[float],
+@server.tool()
+def move_tail(
+    target_angles: list[list[float]],
+    speed: int = 50,
     immediately: bool = True,
-    speed: int = 50,
-) -> str:
-    """Move the robot tail to specified angles.
-
-    Args:
-        angles: List of tail servo angles in degrees (typically a single value).
-        immediately: If True, clear existing actions before moving (default True).
-        speed: Movement speed 0-100 (default 50).
-
-    Returns:
-        A status message confirming the movement was queued.
+) -> dict:
     """
-    try:
-        dog = get_pidog()
-        dog.tail_move([angles], immediately=immediately, speed=speed)
-        return f"Tail move queued (angles={angles}, speed={speed})."
-    except Exception as exc:
-        return f"Error moving tail: {exc}"
-
-
-@mcp.tool()
-def set_pose(
-    x: Optional[float] = None,
-    y: Optional[float] = None,
-    z: Optional[float] = None,
-) -> str:
-    """Set the robot body pose (position offset).
-
+    Move the tail to specified angles.
+    
     Args:
-        x: X-axis position offset (default: unchanged).
-        y: Y-axis position offset (default: unchanged).
-        z: Z-axis (height) offset in mm (default: unchanged).
-
+        target_angles: List of tail angles
+        speed: Speed of movement 0-100 (default: 50)
+        immediately: Stop current movement and move immediately (default: True)
+        
     Returns:
-        A status message confirming the pose was set.
+        Dictionary with status and result message
     """
+    if not PIDOG_AVAILABLE:
+        return {
+            "status": "error",
+            "message": "Pidog module not available",
+        }
+    
+    pidog = get_pidog()
+    if pidog is None:
+        return {
+            "status": "error",
+            "message": "Failed to initialize Pidog",
+        }
+    
     try:
-        dog = get_pidog()
-        dog.set_pose(x=x, y=y, z=z)
-        return f"Pose updated (x={x}, y={y}, z={z})."
-    except Exception as exc:
-        return f"Error setting pose: {exc}"
+        pidog.tail_move(target_angles, speed=speed, immediately=immediately)
+        return {
+            "status": "success",
+            "message": "Tail moved successfully",
+            "angles": target_angles,
+            "speed": speed,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error moving tail: {str(e)}",
+        }
 
 
-@mcp.tool()
-def set_rpy(
-    roll: Optional[float] = None,
-    pitch: Optional[float] = None,
-    yaw: Optional[float] = None,
-    pid: bool = False,
-) -> str:
-    """Set the robot body orientation (roll/pitch/yaw Euler angles).
+@server.tool()
+def stop_movement() -> dict:
+    """
+    Stop all current movement (legs, head, and tail).
+    
+    Returns:
+        Dictionary with status and result message
+    """
+    if not PIDOG_AVAILABLE:
+        return {
+            "status": "error",
+            "message": "Pidog module not available",
+        }
+    
+    pidog = get_pidog()
+    if pidog is None:
+        return {
+            "status": "error",
+            "message": "Failed to initialize Pidog",
+        }
+    
+    try:
+        pidog.body_stop()
+        return {
+            "status": "success",
+            "message": "All movement stopped",
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error stopping movement: {str(e)}",
+        }
 
+
+@server.tool()
+def wait_movement_done() -> dict:
+    """
+    Wait until all current movement (legs, head, and tail) is complete.
+    
+    Returns:
+        Dictionary with status and result message
+    """
+    if not PIDOG_AVAILABLE:
+        return {
+            "status": "error",
+            "message": "Pidog module not available",
+        }
+    
+    pidog = get_pidog()
+    if pidog is None:
+        return {
+            "status": "error",
+            "message": "Failed to initialize Pidog",
+        }
+    
+    try:
+        pidog.wait_all_done()
+        return {
+            "status": "success",
+            "message": "All movement completed",
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error waiting for movement: {str(e)}",
+        }
+
+
+@server.tool()
+def is_movement_done() -> dict:
+    """
+    Check if all current movement is complete.
+    
+    Returns:
+        Dictionary with status and result message including is_done flag
+    """
+    if not PIDOG_AVAILABLE:
+        return {
+            "status": "error",
+            "message": "Pidog module not available",
+            "is_done": False,
+        }
+    
+    pidog = get_pidog()
+    if pidog is None:
+        return {
+            "status": "error",
+            "message": "Failed to initialize Pidog",
+            "is_done": False,
+        }
+    
+    try:
+        is_done = pidog.is_all_done()
+        return {
+            "status": "success",
+            "is_done": is_done,
+            "legs_done": pidog.is_legs_done(),
+            "head_done": pidog.is_head_done(),
+            "tail_done": pidog.is_tail_done(),
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error checking movement status: {str(e)}",
+            "is_done": False,
+        }
+
+
+@server.tool()
+def set_body_pose(x: Optional[float] = None, y: Optional[float] = None, z: Optional[float] = None) -> dict:
+    """
+    Set the body pose (position) in 3D space.
+    
     Args:
-        roll: Roll angle in degrees (default: unchanged).
-        pitch: Pitch angle in degrees (default: unchanged).
-        yaw: Yaw angle in degrees (default: unchanged).
-        pid: If True, use PID-based smooth transition (default False).
-
+        x: X coordinate (optional)
+        y: Y coordinate (optional)
+        z: Z coordinate/height (optional)
+        
     Returns:
-        A status message confirming the orientation was set.
+        Dictionary with status and result message
     """
+    if not PIDOG_AVAILABLE:
+        return {
+            "status": "error",
+            "message": "Pidog module not available",
+        }
+    
+    pidog = get_pidog()
+    if pidog is None:
+        return {
+            "status": "error",
+            "message": "Failed to initialize Pidog",
+        }
+    
     try:
-        dog = get_pidog()
-        dog.set_rpy(roll=roll, pitch=pitch, yaw=yaw, pid=pid)
-        return f"RPY updated (roll={roll}, pitch={pitch}, yaw={yaw}, pid={pid})."
-    except Exception as exc:
-        return f"api_error: Error setting RPY: {exc}"
+        pidog.set_pose(x=x, y=y, z=z)
+        return {
+            "status": "success",
+            "message": "Body pose set successfully",
+            "x": x,
+            "y": y,
+            "z": z,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error setting body pose: {str(e)}",
+        }
 
 
-@mcp.tool()
-def speak(
-    name: str,
-    volume: int = 100,
-) -> str:
-    """Play a sound file (non-blocking).
-
+@server.tool()
+def set_body_rotation(roll: Optional[float] = None, pitch: Optional[float] = None, yaw: Optional[float] = None) -> dict:
+    """
+    Set the body rotation (roll, pitch, yaw).
+    
     Args:
-        name: Sound file name (looked up in the pidog sounds directory,
-              or an absolute path to an .mp3/.wav file).
-        volume: Volume level 0-100 (default 100).
-
+        roll: Roll angle in degrees (optional)
+        pitch: Pitch angle in degrees (optional)
+        yaw: Yaw angle in degrees (optional)
+        
     Returns:
-        A status message confirming the sound was queued.
+        Dictionary with status and result message
     """
+    if not PIDOG_AVAILABLE:
+        return {
+            "status": "error",
+            "message": "Pidog module not available",
+        }
+    
+    pidog = get_pidog()
+    if pidog is None:
+        return {
+            "status": "error",
+            "message": "Failed to initialize Pidog",
+        }
+    
     try:
-        dog = get_pidog()
-        result = dog.speak(name, volume=volume)
+        pidog.set_rpy(roll=roll, pitch=pitch, yaw=yaw)
+        return {
+            "status": "success",
+            "message": "Body rotation set successfully",
+            "roll": roll,
+            "pitch": pitch,
+            "yaw": yaw,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error setting body rotation: {str(e)}",
+        }
+
+
+@server.tool()
+def get_battery_voltage() -> dict:
+    """
+    Get the current battery voltage.
+    
+    Returns:
+        Dictionary with status and battery voltage in volts
+    """
+    if not PIDOG_AVAILABLE:
+        return {
+            "status": "error",
+            "message": "Pidog module not available",
+            "voltage": None,
+        }
+    
+    pidog = get_pidog()
+    if pidog is None:
+        return {
+            "status": "error",
+            "message": "Failed to initialize Pidog",
+            "voltage": None,
+        }
+    
+    try:
+        voltage = pidog.get_battery_voltage()
+        return {
+            "status": "success",
+            "voltage": voltage,
+            "unit": "volts",
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error reading battery voltage: {str(e)}",
+            "voltage": None,
+        }
+
+
+@server.tool()
+def get_distance() -> dict:
+    """
+    Get the current distance reading from the ultrasonic sensor (if available).
+    
+    Returns:
+        Dictionary with status and distance in centimeters
+    """
+    if not PIDOG_AVAILABLE:
+        return {
+            "status": "error",
+            "message": "Pidog module not available",
+            "distance": None,
+        }
+    
+    pidog = get_pidog()
+    if pidog is None:
+        return {
+            "status": "error",
+            "message": "Failed to initialize Pidog",
+            "distance": None,
+        }
+    
+    try:
+        distance = pidog.read_distance()
+        return {
+            "status": "success",
+            "distance": distance,
+            "unit": "cm",
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error reading distance: {str(e)}",
+            "distance": None,
+        }
+
+
+@server.tool()
+def get_imu_data() -> dict:
+    """
+    Get the current IMU (accelerometer and gyroscope) data.
+    
+    Returns:
+        Dictionary with accelerometer and gyroscope readings
+    """
+    if not PIDOG_AVAILABLE:
+        return {
+            "status": "error",
+            "message": "Pidog module not available",
+            "data": None,
+        }
+    
+    pidog = get_pidog()
+    if pidog is None:
+        return {
+            "status": "error",
+            "message": "Failed to initialize Pidog",
+            "data": None,
+        }
+    
+    try:
+        acc_data = pidog.accData
+        gyro_data = pidog.gyroData
+        return {
+            "status": "success",
+            "accelerometer": {
+                "x": acc_data[0],
+                "y": acc_data[1],
+                "z": acc_data[2],
+            },
+            "gyroscope": {
+                "x": gyro_data[0],
+                "y": gyro_data[1],
+                "z": gyro_data[2],
+            },
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error reading IMU data: {str(e)}",
+            "data": None,
+        }
+
+
+@server.tool()
+def speak(name: str, volume: int = 100) -> dict:
+    """
+    Play an audio file from the sound directory (non-blocking).
+    
+    Args:
+        name: Filename (without extension) or full path to audio file
+        volume: Volume level 0-100 (default: 100)
+        
+    Returns:
+        Dictionary with status and result message
+    """
+    if not PIDOG_AVAILABLE:
+        return {
+            "status": "error",
+            "message": "Pidog module not available",
+        }
+    
+    pidog = get_pidog()
+    if pidog is None:
+        return {
+            "status": "error",
+            "message": "Failed to initialize Pidog",
+        }
+    
+    try:
+        result = pidog.speak(name, volume=volume)
         if result is False:
-            return f"No sound file found for '{name}'."
-        return f"Sound '{name}' playing (volume={volume})."
-    except Exception as exc:
-        return f"Error playing sound: {api_error: {exc}"
+            return {
+                "status": "error",
+                "message": f"Audio file not found: {name}",
+            }
+        return {
+            "status": "success",
+            "message": f"Playing audio: {name}",
+            "volume": volume,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error playing audio: {str(e)}",
+        }
 
 
-@mcp.tool()
-def read_distance() -> str:
-    """Read the ultrasonic distance sensor value.
-
-    Returns:
-        The distance reading in cm (or -1 if not available).
+@server.tool()
+def speak_block(name: str, volume: int = 100) -> dict:
     """
-    try:
-        dog = get_pidog()
-        distance = dog.read_distance()
-        return f"Distance: {distance} cm" if distance >= 0 else "Distance sensor not available."
-    except Exception as exc:
-        return f"Error reading distance: {exc}"
-
-
-@mcp.tool()
-def get_battery_voltage() -> str:
-    """Read the current battery voltage.
-
-    Returns:
-        The battery voltage in volts.
-    """
-    try:
-        dog = get_pidog()
-        voltage = dog.get_battery_voltage()
-        return f"Battery voltage: {voltage} V"
-    except Exception as exc:
-        return f"Error reading battery voltage: {exc}"
-
-
-@mcp.tool()
-def body_stop() -> str:
-    """Stop all movement (legs, head, and tail) immediately.
-
-    Returns:
-        A confirmation message.
-    """
-    try:
-        dog = get_pid_instance()
-        dog.body_stop()
-        return "All movement stopped."
-    except Exception as exc:
-        return f"Error stopping body: {exc}"
-
-
-@mcp.tool()
-def wait_all_done() -> str:
-    """Block until all queued movements (legs, head, tail) are complete.
-
-    Returns:
-        A confirmation message when all movements finish.
-    """
-    try:
-        dog = get_pidog()
-        dog.wait_all_done()
-        return "All movements complete."
-    except Exception as exc:
-        return f"Error waiting for movements: {exc}"
-
-
-@mcp.tool()
-def set_body_height(height: int) -> str:
-    """Set the robot body height for pose calculations.
-
+    Play an audio file from the sound directory (blocking until complete).
+    
     Args:
-        height: Body height in mm, range 20-95.
-
+        name: Filename (without extension) or full path to audio file
+        volume: Volume level 0-100 (default: 100)
+        
     Returns:
-        A confirmation message.
+        Dictionary with status and result message
     """
-    if not 20 <= height <= 95:
-        return "Error: height must be between 20 and 95 mm."
+    if not PIDOG_AVAILABLE:
+        return {
+            "status": "error",
+            "message": "Pidog module not available",
+        }
+    
+    pidog = get_pidog()
+    if pidog is None:
+        return {
+            "status": "error",
+            "message": "Failed to initialize Pidog",
+        }
+    
     try:
-        dog = get_pidog()
-        dog.body_height = height
-        return f"Body height set to {height} mm."
-    except Exception as exc:
-        return f"Error setting body height: {exc}"
+        result = pidog.speak_block(name, volume=volume)
+        if result is False:
+            return {
+                "status": "error",
+                "message": f"Audio file not found: {name}",
+            }
+        return {
+            "status": "success",
+            "message": f"Audio playback completed: {name}",
+            "volume": volume,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error playing audio: {str(e)}",
+        }
 
 
-@mcp.tool()
-def set_leg_speed(speed: int) -> str:
-    """Set the default leg movement speed.
-
+@server.tool()
+def reset_to_lie_position(speed: int = 85) -> dict:
+    """
+    Stop all movement and return to the lying position.
+    
     Args:
-        speed: Speed value 0-100 (default 90).
-
+        speed: Speed of movement 0-100 (default: 85)
+        
     Returns:
-        A confirmation message.
+        Dictionary with status and result message
     """
-    if not 0 <= speed <= 100:
-        return "Error: speed must be between 0 and 100."
+    if not PIDOG_AVAILABLE:
+        return {
+            "status": "error",
+            "message": "Pidog module not available",
+        }
+    
+    pidog = get_pidog()
+    if pidog is None:
+        return {
+            "status": "error",
+            "message": "Failed to initialize Pidog",
+        }
+    
     try:
-        dog = get_pidog()
-        dog.legs_speed = speed
-        return f"Leg speed set to {speed}."
-    except Exception as exc:
-        return f"Error setting leg speed: {exc}"
+        pidog.stop_and_lie(speed=speed)
+        return {
+            "status": "success",
+            "message": "Robot stopped and returned to lying position",
+            "speed": speed,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error resetting position: {str(e)}",
+        }
 
 
-@mcp.tool()
-def set_head_speed(speed: int) -> str:
-    """Set the default head movement speed.
-
-    Args:
-        speed: Speed value 0-100 (default 90).
-
-    Returns:
-        A confirmation message.
+@server.resource("status")
+def get_status() -> str:
     """
-    if not 0 <= speed <= 100:
-        return "Error: speed must be between 0 and 100."
+    Get the current status of the Pidog server.
+    
+    Returns:
+        Plain text status information
+    """
+    if not PIDOG_AVAILABLE:
+        return "PidogMCP Status\n===============\nMode: Mock (Pidog module not available)\nPort: {}\nHost: {}".format(MCP_PORT, MCP_HOST)
+    
+    pidog = get_pidog()
+    if pidog is None:
+        return "PidogMCP Status\n===============\nMode: Initialized but failed to create instance\nPort: {}\nHost: {}".format(MCP_PORT, MCP_HOST)
+    
     try:
-        dog = get_pidog()
-        dog.head_speed = speed
-        return f"Head speed set to {api_speed: {speed}."
-    except Exception as exc:
-        return f"Error setting head speed: {exc}"
+        battery = pidog.get_battery_voltage()
+        distance = pidog.read_distance()
+        is_done = pidog.is_all_done()
+        
+        status = f"""PidogMCP Status
+===============
+Mode: Active
+Port: {MCP_PORT}
+Host: {MCP_HOST}
+Battery Voltage: {battery}V
+Distance: {distance}cm
+Movement Done: {is_done}
+"""
+        return status
+    except Exception as e:
+        return f"PidogMCP Status\n===============\nMode: Active but with errors\nPort: {MCP_PORT}\nHost: {MCP_HOST}\nError: {str(e)}"
 
-
-@mcp.tool()
-def set_tail_speed(speed: int) -> str:
-    """Set the default tail movement speed.
-
-    Args:
-        speed: Speed value 0-100 (default 90).
-
-    Returns:
-        A confirmation message.
-    """
-    if not 0 <= speed <= 100:
-        return "Error: speed must be between 0 and 100."
-    try:
-        dog = get_pidog()
-        dog.tail_speed = speed
-        return f"Tail speed set to {speed}."
-    except Exception as exc:
-        return f"Error setting tail speed: {exc}"
-
-
-@mcp.tool()
-def list_actions() -> str:
-    """List all valid action names available for the do_action tool.
-
-    Returns:
-        A formatted list of all valid action names grouped by body part.
-    """
-    return (
-        "Valid actions:\n"
-        "  Legs: stand, sit, lie, lie_with_hands_out, forward, backward, "
-        "turn_left, turn_right, trot, stretch, push_up, doze_off, half_sit\n"
-        "  Head: nod_lethargy, shake_head, tilting_head_left, tilting_head_right, "
-        "tilting_head, head_bark, head_up_for_down\n"
-        "  Tail: wag_tail"
-    )
-
-
-@mcp.tool()
-def rgb_set_mode(
-    mode: str,
-    color: str = "cyan",
-    bps: float = 1.0,
-) -> str:
-    """Set the RGB LED strip display mode.
-
-    Args:
-        mode: Display mode (e.g. 'breath', 'speak', 'listen', 'black').
-        color: LED color name (default 'cyan').
-        bps: Brightness/pulse speed (default 1.0).
-
-    Returns:
-        A confirmation message.
-    """
-    try:
-        dog = get_pidog()
-        dog.rgb_strip.set_mode(mode, color=color, bps=bps)
-        return f"RGB mode set to '{mode}' (color={color}, bps={bps})."
-    except Exception as exc:
-        return f"Error setting RGB mode: {exc}"
-
-
-# -----------------------------------------------------------------------------
-# Entry point
-# -----------------------------------------------------------------------------
 
 def main():
-    """Start the FastMCP HTTP server on port 8080."""
-    import os
+    """Main entry point for the FastMCP server."""
+    print(f"Starting PidogMCP server on {MCP_HOST}:{MCP_PORT}")
+    print(f"Pidog module available: {PIDOG_AVAILABLE}")
+    
+    # Start the server
+    import uvicorn
+    try:
+        uvicorn.run(
+            server.asgi(),
+            host=MCP_HOST,
+            port=MCP_PORT,
+            log_level="info",
+        )
+    except KeyboardInterrupt:
+        print("\nShutting down server...")
+        cleanup_pidog()
+        sys.exit(0)
+    except Exception as e:
+        print(f"Error starting server: {e}")
+        cleanup_pidog()
+        sys.exit(1)
 
-    host = os.getenv("PIDOGMCP_HOST", "0.0.0.0")
-    port = int(os.getenv("PIDOGMCP_PORT", "8080"))
 
-    print(f"Starting PiDog MCP server on {host}:{port}")
-    print(f"Connect to http://{host if host != '0.0.0.0' else 'localhost'}:{port}/mcp")
-
-    mcp.run(
-        transport="streamable-http",
-        host=host,
-        port=port,
-    )
-
-
-if __name__ == "__main__':
+if __name__ == "__main__":
     main()
