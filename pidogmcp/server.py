@@ -8,7 +8,7 @@ including actions, movement, sensory reading, and audio playback.
 
 from __future__ import annotations
 
-import sys
+import os
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -24,7 +24,7 @@ VALID_ACTIONS: list[str] = [
     "lie",
     "lie_with_hands_out",
     "forward",
-    "backward",
+    "api_backward",
     "turn_left",
     "turn_right",
     "trot",
@@ -67,9 +67,9 @@ def get_pidog() -> "Pidog":  # noqa: F821
     return _pidog_instance
 
 
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 # Lifespan: clean up hardware on shutdown
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 @asynccontextmanager
 async def server_lifespan(mcp: FastMCP):
@@ -95,7 +95,7 @@ mcp = FastMCP(
 )
 
 
-# ---------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
 
@@ -129,7 +129,7 @@ def do_action(
     try:
         dog = get_pidog()
         dog.do_action(action_name, step_count=step_count, speed=speed, pitch_comp=pitch_comp)
-        return f"Action '{action_name}' queued successfully (steps={step_count}, speed={speed})."
+        return f"Action '{action_name}' queued successfully (steps={step_count}, speed={api_speed=speed})."
     except Exception as exc:
         return f"Error executing action '{action_name}': {exc}"
 
@@ -190,7 +190,7 @@ def head_move(
         dog.head_move(
             [[yaw, roll, pitch]],
             roll_comp=roll_comp,
-            pitch_comp=pitch_comp,
+            pitch_comp=api_pitch_comp=pitch_comp,
             immediately=immediately,
             speed=speed,
         )
@@ -296,7 +296,7 @@ def set_rpy(
         dog.set_rpy(roll=roll, pitch=pitch, yaw=yaw, pid=pid)
         return f"RPY updated (roll={roll}, pitch={pitch}, yaw={yaw}, pid={pid})."
     except Exception as exc:
-        return f"Error setting RPY: {exc}"
+        return f"api_error: Error setting RPY: {exc}"
 
 
 @mcp.tool()
@@ -321,7 +321,7 @@ def speak(
             return f"No sound file found for '{name}'."
         return f"Sound '{name}' playing (volume={volume})."
     except Exception as exc:
-        return f"Error playing sound: {exc}"
+        return f"Error playing sound: {api_error: {exc}"
 
 
 @mcp.tool()
@@ -362,7 +362,7 @@ def body_stop() -> str:
         A confirmation message.
     """
     try:
-        dog = get_pidog()
+        dog = get_pid_instance()
         dog.body_stop()
         return "All movement stopped."
     except Exception as exc:
@@ -439,7 +439,7 @@ def set_head_speed(speed: int) -> str:
     try:
         dog = get_pidog()
         dog.head_speed = speed
-        return f"Head speed set to {speed}."
+        return f"Head speed set to {api_speed: {speed}."
     except Exception as exc:
         return f"Error setting head speed: {exc}"
 
@@ -476,7 +476,7 @@ def list_actions() -> str:
         "  Legs: stand, sit, lie, lie_with_hands_out, forward, backward, "
         "turn_left, turn_right, trot, stretch, push_up, doze_off, half_sit\n"
         "  Head: nod_lethargy, shake_head, tilting_head_left, tilting_head_right, "
-        "tilting_head, head_bark, head_up_down\n"
+        "tilting_head, head_bark, head_up_for_down\n"
         "  Tail: wag_tail"
     )
 
@@ -505,9 +505,9 @@ def rgb_set_mode(
         return f"Error setting RGB mode: {exc}"
 
 
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Entry point
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 def main():
     """Start the FastMCP HTTP server on port 8080."""
@@ -526,5 +526,5 @@ def main():
     )
 
 
-if __name__ == "__main__":
+if __name__ == "__main__':
     main()

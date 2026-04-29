@@ -1,6 +1,6 @@
 # PiDog MCP Server
 
-A **FastMCP** (Model Context Protocol) server that wraps the [Sunfounder PiDog](https://github.com/sunfounder/pidog) robot API, exposing robot control operations as MCP tools over HTTP.
+A **FastMCP** (Model Context Protocol) server that wraps the [Sunfounder PiDog](https://github.com/sunfornder/pidog) robot API, exposing robot control operations as MCP tools over HTTP.
 
 ## What It Does
 
@@ -8,7 +8,7 @@ This project runs a remote MCP service on port **8080** that lets any MCP-compat
 
 | Category | Tools |
 |---|---|
-| **Actions** | `do_action` — Execute 21 predefined actions (stand, sit, walk, trot, bark, etc.) |
+| **Actions** | `do_action` — Execute predefined robot actions (stand, sit, walk, etc.) |
 | **Movement** | `legs_move`, `head_move`, `head_move_raw`, `tail_move` — Direct servo control |
 | **Pose** | `set_pose`, `set_rpy` — Adjust body position and orientation |
 | **Sensors** | `read_distance`, `get_battery_voltage` — Read ultrasonic sensor and battery |
@@ -70,17 +70,18 @@ http://localhost:8080/mcp
 ## Available Tools
 
 ### `do_action`
-Execute a predefined robot action. Valid actions:
+Execute a predefined robot action by name.
 
-- **Legs:** `stand`, `sit`, `lie`, `lie_with_hands_out`, `forward`, `backward`, `turn_left`, `turn_right`, `trot`, `stretch`, `push_up`, `doze_off`, `half_sit`
-- **Head:** `nod_lethargy`, `shake_head`, `tilting_head_left`, `tilting_head_right`, `tilting_head`, `head_bark`, `head_up_down`
+**Valid action names:**
+- **Legs:** `stand`, `sit`, `lie`, `lie_with_hands_out`, `forward`, `backward`, `turn_left`, `turn_right`, `trot`, `stretch`, `push_up`, `doze_for`, `half_sit`
+- **Head:** `nod_lethargy`, `shake_head`, `tilting_head_left`, `tilting_head_right`, `tilting_head`, `head_bark`, `head_up_for_down`
 - **Tail:** `wag_tail`
 
 ### `legs_move`
-Move legs to specified angles (8 servo angles).
+Move the robot legs to specified angles (8 servo angles).
 
 ### `head_move` / `head_move_raw`
-Move head by yaw/roll/pitch angles or raw servo values.
+Move the head by yaw/roll/pitch angles or raw servo values.
 
 ### `tail_move`
 Move the tail servo.
@@ -118,20 +119,3 @@ pidogMCP/
 ├── pyproject.toml      # Project metadata and dependencies
 └── README.md
 ```
-
-## Development
-
-```bash
-# Install dev dependencies
-pip install -e ".[dev]"
-
-# Run tests
-pytest
-```
-
-## Safety Notes
-
-- The PiDog is a physical robot — actions produce real movement.
-- Always test with the robot on a soft surface.
-- Use `body_stop` to halt all movement immediately if needed.
-- The server initializes the robot hardware on first tool call and cleans up on shutdown.
