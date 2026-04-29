@@ -1,241 +1,137 @@
-# PiDog MCP - Model Context Protocol Server
+# PiDog MCP Server
 
-A FastMCP (HTTP-based Model Context Protocol) server that wraps the [Sunfounder PiDog robot API](https://github.com/sunfounder/pidog), enabling remote control and interaction with PiDog robots through a standardized protocol.
+A **FastMCP** (Model Context Protocol) server that wraps the [Sunfounder PiDog](https://github.com/sunfounder/pidog) robot API, exposing robot control operations as MCP tools over HTTP.
 
-## Overview
+## What It Does
 
-This project provides a remote HTTP-based MCP server that exposes the Sunfounder PiDog robot API as standardized tools and resources. It allows AI assistants and other MCP clients to control PiDog robots over the network.
+This project runs a remote MCP service on port **8080** that lets any MCP-compatible client (such as an AI assistant or chat interface) control a PiDog robot by calling tools. Available capabilities include:
 
-### Features
+| Category | Tools |
+|---|---|
+| **Actions** | `do_action` — Execute 21 predefined actions (stand, sit, walk, trot, bark, etc.) |
+| **Movement** | `legs_move`, `head_move`, `head_move_raw`, `tail_move` — Direct servo control |
+| **Pose** | `set_pose`, `set_rpy` — Adjust body position and orientation |
+| **Sensors** | `read_distance`, `get_battery_voltage` — Read ultrasonic sensor and battery |
+| **Audio** | `speak` — Play sound files |
+| **LED** | `rgb_set_mode` — Control RGB LED strip |
+| **Control** | `body_stop`, `wait_all_done`, `list_actions` — Stop movement, wait, list actions |
 
-- **Action Control**: Execute predefined actions (stand, walk, trot, stretch, etc.)
-- **Movement Control**: Direct control of legs, head, and tail positioning
-- **Body Pose Control**: Set body position and rotation
-- **Sensor Access**: Read battery voltage, ultrasonic distance, and IMU data
-- **Audio Playback**: Play sound files with volume control
-- **Status Monitoring**: Check movement completion status
-- **Mock Mode**: Server can run in mock mode when pidog module is unavailable for testing
+## Prerequisites
 
-## Available Tools
+- **Python 3.12+**
+- **PiDog hardware** connected to a Raspberry Pi (this server talks to physical hardware)
+- The `pidog` Python package installed on the device
 
-### Action Control
-- **`do_action`** - Execute predefined actions on the robot
-  - Valid actions: stand, sit, lie, lie_with_hands_out, forward, backward, turn_left, turn_right, trot, stretch, push_up, doze_off, nod_lethargy, shake_head, tilting_head_left, tilting_head_right, tilting_head, head_bark, wag_tail, head_up_down, half_sit
-  - Supports step count, speed, and pitch compensation
-  
-- **`list_available_actions`** - List all available action names
-
-### Movement Control
-- **`move_legs`** - Direct control of leg angles (8 parameters for 4 legs)
-- **`move_head`** - Control head position with yaw/roll/pitch angles
-- **`move_tail`** - Control tail position
-- **`stop_movement`** - Stop all current movements
-- **`wait_movement_done`** - Block until all movements complete
-- **`is_movement_done`** - Check if all movements are complete
-
-### Body Control
-- **`set_body_pose`** - Set body position (x, y, z)
-- **`set_body_rotation`** - Set body rotation (roll, pitch, yaw)
-
-### Sensors
-- **`get_battery_voltage`** - Get current battery voltage
-- **`get_distance`** - Get ultrasonic distance reading
-- **`get_imu_data`** - Get accelerometer, gyroscope, pitch, and roll data
-
-### Audio
-- **`speak`** - Play a sound file asynchronously
-- **`speak_block`** - Play a sound file and wait for completion
-
-### Resources
-- **`status`** - Get current server status
-
-## Requirements
-
-- Python 3.12 or later
-- `mcp` library (with FastMCP support)
-- `pidog` library (for hardware control) - optional
-- `uvicorn` (included via mcp[cli])
+> **Note:** The PiDog library requires hardware-specific dependencies (`robot_hat`, etc.) that only work on Raspberry Pi with the PiDog HAT attached. The MCP server itself can be developed anywhere, but it must run on the Pi to control the robot.
 
 ## Installation
 
-1. Clone or download this project
-2. Install dependencies using `uv`:
-
 ```bash
+# Clone or navigate to the project
 cd pidogMCP
-uv sync
-```
 
-Or with pip:
-
-```bash
+# Create virtual environment and install dependencies
 pip install -e .
+
+# Or with uv:
+uv sync
 ```
 
 ## Running the Server
 
-### Basic Usage
-
-Start the server on the default port 8080:
-
 ```bash
-uv run pidogmcp
-```
-
-Or:
-
-```bash
+# Default: listens on all interfaces, port 8080
 python -m pidogmcp.server
+
+# Or via the installed entry point
+pidogmcp
 ```
 
 ### Configuration
 
-The server can be configured using environment variables:
-
-- `PIDOG_MCP_HOST` - Server host address (default: 127.0.0.1)
-- `PIDOG_MCP_PORT` - Server port (default: 8080)
-
-Example:
+| Environment Variable | Default      | Description |
+|---------------------|--------------|-------------|
+| `PIDOGMCP_HOST`     | `0.0.0.0`    | Bind address |
+| `PIDOGMCP_PORT`     | `8080`       | Port number |
 
 ```bash
-export PIDOG_MCP_HOST=0.0.0.0
-export PIDOG_MCP_PORT=8080
-uv run pidogmcp
+# Example: run on a custom port
+PIDOGMCP_PORT=9000 python -m pidogmcp.server
 ```
 
-Or on Windows PowerShell:
+### Connect to the Server
 
-```powershell
-$env:PIDOG_MCP_HOST="0.0.0.0"
-$env:PIDOG_MCP_PORT="8080"
-uv run pidogmcp
-```
-
-### Mock Mode
-
-If the `pidog` module is not installed, the server will run in mock mode, returning simulated responses instead of controlling hardware. This is useful for testing and development:
-
-```bash
-uv run pidogmcp
-# Log will show: "pidog module not available - server will run in mock mode"
-```
-
-## Usage Example
-
-Once the server is running, you can interact with it using any MCP client. Example with curl:
-
-```bash
-# Get available actions
-curl http://localhost:8080/status
-
-# Execute an action (via MCP client)
-# do_action with action_name="stand", speed=50
-```
-
-## Architecture
-
-The server is built on:
-- **FastMCP**: HTTP-based Model Context Protocol implementation
-- **Uvicorn**: ASGI server for hosting the FastMCP application
-- **pidog**: Sunfounder PiDog robot control library
-
-### Request Flow
+Once running, connect your MCP client to:
 
 ```
-MCP Client
-    ↓
-HTTP Request (port 8080)
-    ↓
-FastMCP Server (app)
-    ↓
-Tools / Resources
-    ↓
-Pidog API
-    ↓
-Robot Hardware
+http://localhost:8080/mcp
 ```
 
-## Supported Actions
+## Available Tools
 
-The robot supports the following predefined actions via the `do_action` tool:
+### `do_action`
+Execute a predefined robot action. Valid actions:
 
-| Category | Actions |
-|----------|---------|
-| **Base Poses** | stand, sit, lie, lie_with_hands_out, half_sit |
-| **Locomotion** | forward, backward, turn_left, turn_right, trot |
-| **Movements** | stretch, push_up, doze_off, wag_tail |
-| **Head** | nod_lethargy, shake_head, tilting_head_left, tilting_head_right, tilting_head, head_bark, head_up_down |
+- **Legs:** `stand`, `sit`, `lie`, `lie_with_hands_out`, `forward`, `backward`, `turn_left`, `turn_right`, `trot`, `stretch`, `push_up`, `doze_off`, `half_sit`
+- **Head:** `nod_lethargy`, `shake_head`, `tilting_head_left`, `tilting_head_right`, `tilting_head`, `head_bark`, `head_up_down`
+- **Tail:** `wag_tail`
 
-## Development
+### `legs_move`
+Move legs to specified angles (8 servo angles).
 
-### Project Structure
+### `head_move` / `head_move_raw`
+Move head by yaw/roll/pitch angles or raw servo values.
+
+### `tail_move`
+Move the tail servo.
+
+### `set_pose` / `set_rpy`
+Adjust body position (x, y, z) and orientation (roll, pitch, yaw).
+
+### `speak`
+Play a sound file by name.
+
+### `read_distance`
+Read the ultrasonic distance sensor (cm).
+
+### `get_battery_voltage`
+Read the current battery voltage.
+
+### `body_stop`
+Stop all movement immediately.
+
+### `wait_all_done`
+Block until all queued movements complete.
+
+### `list_actions`
+List all valid action names.
+
+### `rgb_set_mode`
+Set the RGB LED strip mode and color.
+
+## Project Structure
 
 ```
 pidogMCP/
-├── pyproject.toml          # Project configuration
 ├── pidogmcp/
-│   ├── __init__.py         # Package initialization
-│   └── server.py           # FastMCP server implementation
-├── README.md               # This file
-└── .venv/                  # Virtual environment (created by uv)
+│   └── server.py      # FastMCP server with all tool definitions
+├── pyproject.toml      # Project metadata and dependencies
+└── README.md
 ```
 
-### Adding New Tools
-
-To add a new tool, add a function decorated with `@app.tool()` in `pidogmcp/server.py`:
-
-```python
-@app.tool()
-def my_new_tool(param: str) -> str:
-    """Tool description."""
-    if not PIDOG_AVAILABLE:
-        return "Mock response"
-    
-    try:
-        pidog = get_pidog()
-        # Interact with pidog
-        return "Success message"
-    except Exception as e:
-        return f"Error: {e}"
-```
-
-### Testing
-
-Test the server in mock mode without needing hardware:
+## Development
 
 ```bash
-# Install without pidog dependency
-pip install mcp[cli] uvicorn
+# Install dev dependencies
+pip install -e ".[dev]"
 
-# Run server
-python -m pidogmcp.server
+# Run tests
+pytest
 ```
 
-## Troubleshooting
+## Safety Notes
 
-### "pidog module not available"
-- The server is running in mock mode, which is fine for testing
-- To use with hardware, install pidog: `pip install pidog`
-
-### Server fails to start
-- Check that port 8080 is not in use: `netstat -tuln | grep 8080` (Linux/Mac) or `netstat -ano | findstr :8080` (Windows)
-- Change port: `PIDOG_MCP_PORT=8081 uv run pidogmcp`
-
-### No response from robot
-- Ensure the robot is powered on and connected
-- Check that the pidog library can communicate with the hardware
-- Verify battery voltage using `get_battery_voltage` tool
-
-## Resources
-
-- [Sunfounder PiDog GitHub](https://github.com/sunfounder/pidog)
-- [Model Context Protocol Documentation](https://modelcontextprotocol.io/)
-- [FastMCP Documentation](https://github.com/jlowin/fastmcp)
-
-## License
-
-This project is provided as-is for controlling Sunfounder PiDog robots. See LICENSE for details.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit pull requests or open issues for bugs and feature requests.
+- The PiDog is a physical robot — actions produce real movement.
+- Always test with the robot on a soft surface.
+- Use `body_stop` to halt all movement immediately if needed.
+- The server initializes the robot hardware on first tool call and cleans up on shutdown.
